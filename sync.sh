@@ -151,7 +151,7 @@ case $key in
 	;;
     
 	'push')
-  echo "Pushing to $DIR_REMOTE from $DIR_LOCAL"
+  echo "Pushing from $DIR_LOCAL to $DIR_REMOTE"
   push
 	;;
   
@@ -163,7 +163,7 @@ case $key in
   *)
     echo $"Usage: $0 [options] {init|push|pull}"
     echo $"Example: $0 --local ~/Pictures --remote /Volumes/Jeremy/Pictures --date 2016-07-07 pull"
-    echo $"Example: $0 --local /Volumes/Jeremy/Pictures --s3 s3://lightroom.jemdiggity push"
+    echo $"Example: $0 --local /Volumes/Jeremy/Pictures --remote s3://lightroom.jemdiggity push"
     echo $"Example: $0 --local ~/Pictures --remote /Volumes/Jeremy/Pictures init"
     exit 1
   ;;
