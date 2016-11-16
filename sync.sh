@@ -1,4 +1,7 @@
 #!/bin/bash
+
+#Script to sync lightroom database and image files to another filesystem and AWS S3.
+
 SUCCESS=0
 FAILURE=1
 
