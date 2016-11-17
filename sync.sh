@@ -7,6 +7,8 @@ FAILURE=1
 
 CLEAN_DATE=""
 
+IGNORED_FILES="*/.DS_Store"
+
 function isdigit ()    # Tests whether *entire string* is numerical.
 {             # In other words, tests for integer variable.
   [ $# -eq 1 ] || return $FAILURE
@@ -70,9 +72,9 @@ function push {
   check_options || return $FAILURE
   
   if [[ "$DIR_REMOTE" == "s3://"* ]]; then
-    aws s3 sync --size-only "$DIR_LOCAL" "$DIR_REMOTE"
+    aws s3 sync --size-only --exclude="$IGNORED_FILES" "$DIR_LOCAL" "$DIR_REMOTE"
   else
-  	rsync -avz "$DIR_LOCAL" "$DIR_REMOTE"
+  	rsync -avz --exclude="$IGNORED_FILES" "$DIR_LOCAL" "$DIR_REMOTE"
   fi
   
 }
