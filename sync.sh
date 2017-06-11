@@ -1,22 +1,49 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
+# Author: https://github.com/jemdiggity
 
 #Script to sync lightroom database and image files to another filesystem and AWS S3.
+
+set -e
 
 SUCCESS=0
 FAILURE=1
 
+VERBOSE=0
+
 CLEAN_DATE=""
 
-IGNORED_FILES="*/.DS_Store"
+IGNORED_FILES="*.DS_Store"
+
+_arg_backups=off
+_arg_previews=on
+
+function die ()
+{
+  local _ret=$2
+  test -n "$_ret" || _ret=1
+  test "$_PRINT_HELP" = yes && print_help >&2
+  echo "$1" >&2
+  exit ${_ret}
+}
+
+function print_help ()
+{
+  printf 'Usage: %s command [args] <src> <dst>\n' "$0"
+  printf "\t%s\n" "<command>: 'init' or 'push' or 'pull'"
+  printf "\t%s\n" "<src>: source"
+  printf "\t%s\n" "<dst>: destinatinon"
+  printf "\t%s\n" "-h,--help: Prints help"
+}
 
 function isdigit ()    # Tests whether *entire string* is numerical.
 {             # In other words, tests for integer variable.
-  [ $# -eq 1 ] || return $FAILURE
+[ $# -eq 1 ] || return $FAILURE
 
-  case $1 in
-    *[!0-9]*|"") return $FAILURE;;
-              *) return $SUCCESS;;
-  esac
+case $1 in
+  *[!0-9]*|"") return $FAILURE;;
+*) return $SUCCESS;;
+esac
 }
 
 function date_check ()
@@ -30,11 +57,11 @@ function date_check ()
   year=`echo $@       | awk -F'-' '{print $1}'`
   month=`echo $@      | awk -F'-' '{print $2}'`
   dayOfMonth=`echo $@ | awk -F'-' '{print $3}'`
-    
+
   isdigit "$year" || return $FAILURE
   
   CLEAN_DATE="$year"
-    
+
   if [ "$month" != "" ]; then
     isdigit "$month" || return $FAILURE
     
@@ -51,38 +78,61 @@ function date_check ()
 }
 
 function check_options {
-  [ "$DIR_LOCAL" == "" ] && return $FAILURE
-  [ "$DIR_REMOTE" == "" ] && return $FAILURE
+  if [[ "$_src" == "" ]]; then
+    echo "_src empty"
+    return $FAILURE
+  fi
+  if [[ "$_dst" == "" ]]; then
+    echo "_dst empty"
+    return $FAILURE
+  fi
   
   #Remove trailing slash for non-weird behaviour with sync program
-  DIR_LOCAL=${DIR_LOCAL%/}
-  DIR_REMOTE=${DIR_REMOTE%/}
+  _src=${_src%/}
+  _dst=${_dst%/}
   return $SUCCESS
 }
 
 function init {
   # Copy Lightroom database into local dir.
   check_options || return $FAILURE
-  
-  cp -av "$DIR_REMOTE/Lightroom" "$DIR_LOCAL"
-}
 
-function push {
-  # Sync local dir to remote dir
-  check_options || return $FAILURE
-  
-  if [[ "$DIR_REMOTE" == "s3://"* ]]; then
-    aws s3 sync --size-only --exclude="$IGNORED_FILES" "$DIR_LOCAL" "$DIR_REMOTE"
+  if [[ "$_src" == "s3://"* ]]; then
+    echo "If you see errors related to glacier storage, you may need to manually restore items via AWS console."
+    NO_BACKUPS=""
+    NO_PREVIEWS=""
+    if [[ $_arg_backups == "off" ]]; then
+      echo "Not syncing backup files for faster initialization."
+      NO_BACKUPS="*Lightroom/Backups/*"
+    fi
+    if [[ $_arg_previews == "off" ]]; then
+     echo "Not syncing preview files for faster initialization."
+     NO_PREVIEWS="*Lightroom/Lightroom*Previews*/*"
+    fi
+    aws s3 sync --force-glacier-transfer --exclude "*" --include "Lightroom/*" --exclude "${NO_BACKUPS}" --exclude "${NO_PREVIEWS}" --include "*Lightroom/Lightroom*Previews*/*.db" --exclude "$IGNORED_FILES" "$_src" "$_dst"
   else
-  	rsync -avz --exclude="$IGNORED_FILES" "$DIR_LOCAL" "$DIR_REMOTE"
+    cp -av "${_src}/Lightroom" "$_dst"
   fi
-  
 }
 
-function pull {
+function push() {
+  check_options || return $FAILURE
+
+  if [[ "$_src" == "s3://"* ]] || [[ "$_dst" == "s3://"* ]]; then
+    echo "Pushing Lightroom data to $_dst"
+    aws s3 sync --exclude "*" --include "*Lightroom/*" --exclude "*Lightroom/Backups/*" --exclude "$IGNORED_FILES" "$_src" "$_dst"
+    echo "Pushing media to $_dst"
+    aws s3 sync --size-only --exclude "*" --include "19??/*" --include "20??/*" --exclude "$IGNORED_FILES" "$_src" "$_dst"
+  else
+    echo "Pushing to $_dst"
+    rsync -avz "$_src" "$_dst"
+  fi
+}
+
+function pull() {
   check_options || return $FAILURE
   
-  date=$TARGET_DATE
+  date=$_arg_date
   
   date_check "$date" || return $FAILURE
   
@@ -90,88 +140,152 @@ function pull {
   month=`echo $CLEAN_DATE | awk -F'-' '{print $2}'`
   dayOfMonth=`echo $CLEAN_DATE | awk -F'-' '{print $3}'`
 
-  mkdir -p $DIR_LOCAL/$year
-  
-  if [ "$dayOfMonth" == "" ]; then
+   if [ "$dayOfMonth" == "" ]; then
     if [ "$month" == "" ]; then
       if [ "$year" == "" ]; then
         echo "Syncing EVERYTHING!!!"
-        if [[ "$DIR_REMOTE" == "s3://"* ]]; then
-          aws s3 sync --size-only "$DIR_REMOTE" "$DIR_LOCAL"
+        if [[ "$_src" == "s3://"* ]]; then
+          aws s3 sync --force-glacier-transfer --size-only --exclude "$IGNORED_FILES" "$_src" "$_dst"
         else
-          rsync -avz "$DIR_REMOTE" "$DIR_LOCAL"
+          rsync -avz "$_src" "$_dst"
         fi
       else
         echo "Syncing whole year: $year"
-        if [[ "$DIR_REMOTE" == "s3://"* ]]; then
-          aws s3 sync --size-only "$DIR_REMOTE/$year" "$DIR_LOCAL"
+        if [[ "$_src" == "s3://"* ]]; then
+          aws s3 sync --force-glacier-transfer --size-only --exclude "$IGNORED_FILES" "$_src/$year" "$_dst/$year"
         else
-          rsync -avz "$DIR_REMOTE/$year" "$DIR_LOCAL"
+          rsync -avz "$_src/$year" "$_dst"
         fi
       fi
     else
       echo "Syncing whole month: $year-$month"
-      if [[ "$DIR_REMOTE" == "s3://"* ]]; then
-        aws s3 sync --size-only --include="/$year" --include="/$year/$year-$month-*" --include="/$year/$year-$month-*/*" --exclude="*" "$DIR_REMOTE/$year" "$DIR_LOCAL"
+      if [[ "$_src" == "s3://"* ]]; then
+        aws s3 sync --force-glacier-transfer --size-only --exclude="*" --include="$year/$year-$month-*/*" --exclude "$IGNORED_FILES" "$_src/$year" "$_dst"
       else
-        rsync -avz --include="/$year" --include="/$year/$year-$month-*" --include="/$year/$year-$month-*/*" --exclude="*" "$DIR_REMOTE/$year" "$DIR_LOCAL"
+        rsync -avz --include=\"$year-$month-*/*\" --exclude="*" "$_src/$year/" "$_dst/$year"
       fi
     fi
   else
     echo "Syncing date: $year-$month-$dayOfMonth"
-    if [[ "$DIR_REMOTE" == "s3://"* ]]; then
-      aws s3 sync --size-only "$DIR_REMOTE/$year/$year-$month-$dayOfMonth" "$DIR_LOCAL/$year"
+    if [[ "$_src" == "s3://"* ]]; then
+      aws s3 sync --force-glacier-transfer --size-only --exclude "$IGNORED_FILES" "$_src/$year/$year-$month-$dayOfMonth" "$_dst/$year"
     else
-      rsync -avz "$DIR_REMOTE/$year/$year-$month-$dayOfMonth" "$DIR_LOCAL/$year"
+      rsync -avz "$_src/$year/$year-$month-$dayOfMonth" "$_dst/$year"
     fi
   fi
 }
 
-while [[ $# -gt 0 ]]
-do
-key="$1"
-           
-case $key in
-  '--remote')
-  DIR_REMOTE="$2"
-  shift
-  ;;
-  
-  '--local')
-  DIR_LOCAL="$2"
-  shift
-  ;;
-  
-  '--date')
-  TARGET_DATE="$2"
-  shift
-  ;;
+if [[ $(which aws) == "" ]]; then
+  echo "\"awscli\" not found. Installing..."
+  pip install awscli
+fi
 
-	'init')
-  echo "Initializing from $DIR_REMOTE to $DIR_LOCAL"
-  init
-	;;
-    
-	'push')
-  echo "Pushing from $DIR_LOCAL to $DIR_REMOTE"
-  push
-	;;
-  
- 	'pull')
-  echo "Pulling from $DIR_REMOTE to $DIR_LOCAL"
-  pull
-	;;
-  
+subcommand=$1
+shift
+
+case "$subcommand" in
+  init)
+    while test $# -gt 0; do
+      case $1 in
+      -h|--help)
+        printf 'Usage: %s init [--(no-)backups] [--(no-)previews] [-v|--verbose] [-h|--help] <src> <dst>\n' "$0"
+        printf "\tExample: %s\n" "$0 init --no-previews \"s3://lightroom\" \"~/Pictures\""
+        exit 1
+        ;;
+      -v|--verbose)
+        VERBOSE=1
+        ;;
+      --no-backups|--backups)
+        _arg_backups="on"
+        test "${1:0:5}" = "--no-" && _arg_backups="off"
+        ;;
+      --no-previews|--previews)
+        _arg_previews="on"
+        test "${1:0:5}" = "--no-" && _arg_previews="off"
+        ;;
+      *)
+        _positionals+=("$1")
+        ;;
+      esac
+      shift
+    done
+    _positional_names=('_src' '_dst' )
+    test ${#_positionals[@]} -lt 2 && _PRINT_HELP=yes die "FATAL ERROR: Not enough positional arguments - we require exactly 2, but got only ${#_positionals[@]}." 1
+    test ${#_positionals[@]} -gt 2 && _PRINT_HELP=yes die "FATAL ERROR: There were spurious positional arguments --- we expect exactly 2, but got ${#_positionals[@]} (the last one was: '${_positionals[*]: -1}')." 1
+    for (( ii = 0; ii < ${#_positionals[@]}; ii++))
+    do
+      eval "${_positional_names[ii]}=\${_positionals[ii]}" || die "Error during argument parsing, possibly an Argbash bug." 1
+    done
+    init
+    ;;
+    push)
+    while test $# -gt 0; do
+      _key="$1"
+      case "$_key" in
+        -h|--help )
+          printf 'Usage: %s push [-h|--help] [-v|--verbose] <src> <dst>\n' "$0"
+          printf "\tExample: %s\n" "$0 push \"~/Pictures\" \"s3://lightroom\""
+          exit 1
+          ;;
+        -v|--verbose)
+          VERBOSE=1
+          ;;
+        *)
+          _positionals+=("$1")
+          ;;
+      esac
+      shift
+    done
+    _positional_names=('_src' '_dst' )
+    test ${#_positionals[@]} -lt 2 && _PRINT_HELP=yes die "FATAL ERROR: Not enough positional arguments - we require exactly 2, but got only ${#_positionals[@]}." 1
+    test ${#_positionals[@]} -gt 2 && _PRINT_HELP=yes die "FATAL ERROR: There were spurious positional arguments --- we expect exactly 2, but got ${#_positionals[@]} (the last one was: '${_positionals[*]: -1}')." 1
+    for (( ii = 0; ii < ${#_positionals[@]}; ii++))
+    do
+      eval "${_positional_names[ii]}=\${_positionals[ii]}" || die "Error during argument parsing, possibly an Argbash bug." 1
+    done
+    push
+    ;;
+  pull)
+    while test $# -gt 0; do
+      _key="$1"
+      case "$_key" in
+        -h|--help )
+          printf 'Usage: %s pull [-h|--help] [-v|--verbose] [-d|--date <arg>] <src> <dst>\n' "$0"
+          printf "\tExample: %s\n" "$0 pull -d 2014-07-13 \"s3://lightroom\" \"~/Pictures\""
+          exit 1
+          ;;
+        -v|--verbose)
+          VERBOSE=1
+          ;;
+        -d|--date|--date=*)
+          _val="${_key##--option=}"
+          if test "$_val" = "$_key"
+          then
+            test $# -lt 2 && die "Missing value for the optional argument '$_key'." 1
+            _val="$2"
+            shift
+          fi
+          _arg_date="$_val"
+          ;;
+        *)
+          _positionals+=("$1")
+          ;;
+      esac
+      shift
+    done
+    _positional_names=('_src' '_dst' )
+    test ${#_positionals[@]} -lt 2 && _PRINT_HELP=yes die "FATAL ERROR: Not enough positional arguments - we require exactly 2, but got only ${#_positionals[@]}." 1
+    test ${#_positionals[@]} -gt 2 && _PRINT_HELP=yes die "FATAL ERROR: There were spurious positional arguments --- we expect exactly 2, but got ${#_positionals[@]} (the last one was: '${_positionals[*]: -1}')." 1
+    for (( ii = 0; ii < ${#_positionals[@]}; ii++))
+    do
+      eval "${_positional_names[ii]}=\${_positionals[ii]}" || die "Error during argument parsing, possibly an Argbash bug." 1
+    done
+    pull
+    ;;
   *)
-    echo $"Usage: $0 [options] {init|push|pull}"
-    echo $"Example: $0 --local ~/Pictures --remote /Volumes/Jeremy/Pictures --date 2016-07-07 pull"
-    echo $"Example: $0 --local /Volumes/Jeremy/Pictures --remote s3://lightroom.jemdiggity push"
-    echo $"Example: $0 --local ~/Pictures --remote /Volumes/Jeremy/Pictures init"
-    exit 1
-  ;;
+    _PRINT_HELP=yes die "Unknown subcommand \"$1\"" 1
+    ;;
 esac
-shift # past argument or value
-done
 
 exit 0
 
