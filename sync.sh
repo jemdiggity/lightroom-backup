@@ -160,7 +160,7 @@ function pull() {
     else
       echo "Syncing whole month: $year-$month"
       if [[ "$_src" == "s3://"* ]]; then
-        aws s3 sync --force-glacier-transfer --size-only --exclude="*" --include="$year/$year-$month-*/*" --exclude "$IGNORED_FILES" "$_src/$year" "$_dst"
+        aws s3 sync --force-glacier-transfer --size-only --exclude "*" --include "$year-$month-*/*" --exclude "$IGNORED_FILES" "$_src/$year" "$_dst/$year"
       else
         rsync -avz --include=\"$year-$month-*/*\" --exclude="*" "$_src/$year/" "$_dst/$year"
       fi
