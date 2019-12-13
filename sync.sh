@@ -143,7 +143,7 @@ function do_restore() {
     --bucket $_bucket_name \
     --query "Contents[?StorageClass=='GLACIER']" \
     --output text --prefix ${prefix} \
-    | awk -F $'\t' '{print $2}' \
+    | awk -F $'\t' -v q="'" '{print q$2q}' \
     | tr '\n' '\0' \
     | xargs -L 1 -0 echo aws s3api restore-object --restore-request Days=7 --bucket "$_bucket_name" --key \
     | sh
